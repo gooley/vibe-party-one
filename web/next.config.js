@@ -1,15 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  experimental: {
+    appDir: true,
+  },
   images: {
     domains: ['localhost'],
     unoptimized: true,
-  },
-  webpack: (config) => {
-    config.resolve.extensionAlias = {
-      '.js': ['.js', '.ts'],
-      '.jsx': ['.jsx', '.tsx'],
-    };
-    return config;
   },
 };
 
