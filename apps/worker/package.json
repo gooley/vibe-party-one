@@ -1,0 +1,25 @@
+{
+  "name": "worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts,.tsx",
+    "type-check": "tsc --noEmit",
+    "test": "echo \"No tests configured for worker app\"",
+    "test:run": "echo \"No tests configured for worker app\"",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "bullmq": "^5.37.0",
+    "redis": "^4.7.0",
+    "shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.19.2",
+    "typescript": "^5"
+  }
+}
