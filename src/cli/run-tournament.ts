@@ -13,6 +13,7 @@ import {
   ScoredPhoto,
   TournamentResult,
   PhotoID,
+  PairwiseJudgment,
 } from "../tournament/types.js";
 import { runPairwise, runNwise, runElo } from "../tournament/bracket.js";
 import { judgePair } from "../scoring/openrouter.js";
@@ -25,21 +26,57 @@ const RESULTS_DIR = "./results";
  */
 function loadConfig(): TournamentConfig {
   const args = process.argv.slice(2);
-  const nonFlagArgs = args.filter((arg) => !arg.startsWith("--"));
-  const configArg = nonFlagArgs[0];
+
+  // Parse --group flag
+  const groupArgIndex = args.findIndex((arg) => arg === "--group");
+  const groupFromFlag =
+    groupArgIndex !== -1 && args[groupArgIndex + 1]
+      ? args[groupArgIndex + 1]
+      : undefined;
+
+  // Filter out flag arguments and their values to find config JSON
+  const filteredArgs = args.filter((arg, index) => {
+    // Skip flags that start with --
+    if (arg.startsWith("--")) return false;
+    // Skip values after --group flag
+    if (index > 0 && args[index - 1] === "--group") return false;
+    return true;
+  });
+
+  const configArg = filteredArgs[0];
 
   if (!configArg) {
     // Default configuration
-    return {
+    const config: TournamentConfig = {
       algorithm: "pairwise",
       rounds: 3,
-      model: "google/gemini-2.5-flash-preview-05-20",
+      // model: "google/gemini-2.5-flash-preview-05-20",
+      model: "anthropic/claude-sonnet-4",
       eliminationRate: 0.5,
     };
+
+    if (groupFromFlag) {
+      config.group = groupFromFlag;
+    }
+
+    return config;
   }
 
   try {
-    return JSON.parse(configArg) as TournamentConfig;
+    const config = JSON.parse(configArg) as TournamentConfig;
+
+    // Command line --group flag overrides config file group
+    if (groupFromFlag) {
+      config.group = groupFromFlag;
+    }
+
+    // Generate tournament ID if not provided
+    if (!config.tournamentId) {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const groupSuffix = config.group ? `-${config.group}` : "";
+      config.tournamentId = `tournament-${config.algorithm}${groupSuffix}-${timestamp}`;
+    }
+    return config;
   } catch (error) {
     console.error("Invalid JSON configuration:", error);
     process.exit(1);
@@ -47,25 +84,84 @@ function loadConfig(): TournamentConfig {
 }
 
 /**
- * Get all photo files from the photos directory
+ * Get available photo groups (subdirectories) in the photos folder
  */
-function getPhotoFiles(): string[] {
+function getAvailableGroups(): string[] {
+  if (!existsSync(PHOTOS_DIR)) {
+    return [];
+  }
+
+  const items = readdirSync(PHOTOS_DIR);
+  const groups = items.filter((item) => {
+    const itemPath = join(PHOTOS_DIR, item);
+    return statSync(itemPath).isDirectory();
+  });
+
+  return groups.sort();
+}
+
+/**
+ * Get all photo files from the photos directory or a specific group
+ */
+function getPhotoFiles(group?: string): string[] {
   if (!existsSync(PHOTOS_DIR)) {
     console.error(`Photos directory not found: ${PHOTOS_DIR}`);
     process.exit(1);
   }
 
-  const files = readdirSync(PHOTOS_DIR)
-    .filter((file) => {
-      const ext = extname(file).toLowerCase();
-      return [".jpg", ".jpeg", ".png"].includes(ext);
-    })
-    .map((file) => join(PHOTOS_DIR, file))
-    .filter((filePath) => statSync(filePath).isFile())
-    .sort((a, b) => statSync(a).mtime.getTime() - statSync(b).mtime.getTime());
+  let searchDir = PHOTOS_DIR;
+  let files: string[] = [];
+
+  if (group) {
+    // Search in specific group subdirectory
+    searchDir = join(PHOTOS_DIR, group);
+    if (!existsSync(searchDir)) {
+      console.error(`Group directory not found: ${searchDir}`);
+      console.log(`Available groups: ${getAvailableGroups().join(", ")}`);
+      process.exit(1);
+    }
+
+    files = readdirSync(searchDir)
+      .filter((file) => {
+        const ext = extname(file).toLowerCase();
+        return [".jpg", ".jpeg", ".png"].includes(ext);
+      })
+      .map((file) => join(searchDir, file))
+      .filter((filePath) => statSync(filePath).isFile())
+      .sort(
+        (a, b) => statSync(a).mtime.getTime() - statSync(b).mtime.getTime()
+      );
+  } else {
+    // Search in all groups or root photos directory
+    const availableGroups = getAvailableGroups();
+
+    if (availableGroups.length > 0) {
+      console.log(`Available groups: ${availableGroups.join(", ")}`);
+      console.error(
+        "Multiple groups found. Please specify a group using the --group flag or include group in config JSON."
+      );
+      console.error(
+        `Example: npm run tournament:demo '{"group": "${availableGroups[0]}", "algorithm": "elo"}'`
+      );
+      process.exit(1);
+    } else {
+      // No subdirectories, search in root photos directory
+      files = readdirSync(PHOTOS_DIR)
+        .filter((file) => {
+          const ext = extname(file).toLowerCase();
+          return [".jpg", ".jpeg", ".png"].includes(ext);
+        })
+        .map((file) => join(PHOTOS_DIR, file))
+        .filter((filePath) => statSync(filePath).isFile())
+        .sort(
+          (a, b) => statSync(a).mtime.getTime() - statSync(b).mtime.getTime()
+        );
+    }
+  }
 
   if (files.length === 0) {
-    console.error("No photo files found in photos directory");
+    const groupMsg = group ? ` in group "${group}"` : "";
+    console.error(`No photo files found${groupMsg}`);
     process.exit(1);
   }
 
@@ -100,10 +196,12 @@ async function initializePhotos(photoPaths: string[]): Promise<ScoredPhoto[]> {
  */
 async function runPairwiseComparisons(
   photos: ScoredPhoto[],
-  model: string
-): Promise<void> {
+  model: string,
+  round: number
+): Promise<PairwiseJudgment[]> {
   const activePhotos = photos.filter((p) => !p.eliminated);
   const comparisons = Math.min(10, activePhotos.length * 2); // Limit comparisons
+  const judgments: PairwiseJudgment[] = [];
 
   for (let i = 0; i < comparisons; i++) {
     // Pick two random photos
@@ -118,6 +216,21 @@ async function runPairwiseComparisons(
 
     try {
       const judgment = await judgePair(photoA.path, photoB.path, model);
+
+      // Create judgment record
+      const judgmentRecord: PairwiseJudgment = {
+        id: `${photoA.id}-vs-${photoB.id}-${Date.now()}`,
+        photoA: photoA.id,
+        photoB: photoB.id,
+        photoAPath: photoA.path,
+        photoBPath: photoB.path,
+        winner: judgment.winner,
+        explanation: judgment.explanation,
+        timestamp: new Date(),
+        round,
+        model,
+      };
+      judgments.push(judgmentRecord);
 
       // Update scores based on judgment
       const winner = judgment.winner === "a" ? photoA : photoB;
@@ -137,6 +250,8 @@ async function runPairwiseComparisons(
       console.error(`  Error comparing photos: ${error}`);
     }
   }
+
+  return judgments;
 }
 
 /**
@@ -145,20 +260,25 @@ async function runPairwiseComparisons(
 function saveResults(
   photos: ScoredPhoto[],
   config: TournamentConfig,
-  round: number
+  round: number,
+  judgments: PairwiseJudgment[]
 ): void {
   if (!existsSync(RESULTS_DIR)) {
     mkdirSync(RESULTS_DIR, { recursive: true });
   }
+
+  const tournamentId = config.tournamentId || `tournament-${Date.now()}`;
 
   const result: TournamentResult = {
     photos,
     config,
     round,
     timestamp: new Date(),
+    judgments,
+    tournamentId,
   };
 
-  const filename = join(RESULTS_DIR, `round-${round}.json`);
+  const filename = join(RESULTS_DIR, `${tournamentId}-round-${round}.json`);
   writeFileSync(filename, JSON.stringify(result, null, 2));
   console.log(`Results saved to ${filename}`);
 }
@@ -166,16 +286,18 @@ function saveResults(
 /**
  * Load existing results for resume functionality
  */
-function loadExistingResults(): {
+function loadExistingResults(tournamentId?: string): {
   photos: ScoredPhoto[];
   lastRound: number;
+  judgments: PairwiseJudgment[];
 } | null {
   if (!existsSync(RESULTS_DIR)) {
     return null;
   }
 
+  const prefix = tournamentId ? `${tournamentId}-round-` : "round-";
   const resultFiles = readdirSync(RESULTS_DIR)
-    .filter((file) => file.startsWith("round-") && file.endsWith(".json"))
+    .filter((file) => file.startsWith(prefix) && file.endsWith(".json"))
     .sort();
 
   if (resultFiles.length === 0) {
@@ -183,13 +305,29 @@ function loadExistingResults(): {
   }
 
   const lastFile = resultFiles[resultFiles.length - 1];
-  const lastRound = parseInt(lastFile.match(/round-(\d+)\.json$/)?.[1] || "0");
+  const roundPattern = tournamentId
+    ? new RegExp(
+        `${tournamentId.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&"
+        )}-round-(\\d+)\\.json$`
+      )
+    : /round-(\d+)\.json$/;
+  const lastRound = parseInt(lastFile.match(roundPattern)?.[1] || "0");
 
   try {
     const data = JSON.parse(
       readFileSync(join(RESULTS_DIR, lastFile), "utf-8")
     ) as TournamentResult;
-    return { photos: data.photos, lastRound };
+
+    // Handle legacy results without judgments field
+    const judgments = data.judgments || [];
+
+    return {
+      photos: data.photos,
+      lastRound,
+      judgments,
+    };
   } catch (error) {
     console.error("Error loading existing results:", error);
     return null;
@@ -200,9 +338,37 @@ function loadExistingResults(): {
  * Main tournament runner
  */
 async function runTournament(): Promise<void> {
+  // Check for --list-groups flag
+  if (process.argv.includes("--list-groups")) {
+    const groups = getAvailableGroups();
+    if (groups.length === 0) {
+      console.log(
+        "No groups found. Photos should be placed directly in the photos/ directory."
+      );
+    } else {
+      console.log("Available photo groups:");
+      groups.forEach((group) => {
+        const groupPath = join(PHOTOS_DIR, group);
+        const photoCount = readdirSync(groupPath).filter((file) => {
+          const ext = extname(file).toLowerCase();
+          return [".jpg", ".jpeg", ".png"].includes(ext);
+        }).length;
+        console.log(`  ${group} (${photoCount} photos)`);
+      });
+    }
+    return;
+  }
+
   const config = loadConfig();
   const isDryRun = process.argv.includes("--dry-run");
   const shouldResume = process.argv.includes("--resume");
+
+  // Generate tournament ID for new tournaments
+  if (!config.tournamentId) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const groupSuffix = config.group ? `-${config.group}` : "";
+    config.tournamentId = `tournament-${config.algorithm}${groupSuffix}-${timestamp}`;
+  }
 
   console.log("Tournament Configuration:", JSON.stringify(config, null, 2));
   console.log("Dry run:", isDryRun);
@@ -210,22 +376,27 @@ async function runTournament(): Promise<void> {
 
   let photos: ScoredPhoto[];
   let startRound = 0;
+  let allJudgments: PairwiseJudgment[] = [];
 
   if (shouldResume) {
-    const existing = loadExistingResults();
+    const existing = loadExistingResults(config.tournamentId);
     if (existing) {
       photos = existing.photos;
       startRound = existing.lastRound;
-      console.log(`Resuming from round ${startRound}`);
+      allJudgments = existing.judgments;
+      console.log(
+        `Resuming tournament ${config.tournamentId} from round ${startRound} with ${allJudgments.length} existing judgments`
+      );
     } else {
       console.log("No existing results found, starting fresh");
-      photos = await initializePhotos(getPhotoFiles());
+      photos = await initializePhotos(getPhotoFiles(config.group));
     }
   } else {
-    photos = await initializePhotos(getPhotoFiles());
+    photos = await initializePhotos(getPhotoFiles(config.group));
   }
 
-  console.log(`Starting tournament with ${photos.length} photos`);
+  const groupMsg = config.group ? ` from group "${config.group}"` : "";
+  console.log(`Starting tournament with ${photos.length} photos${groupMsg}`);
 
   const algorithmMap = {
     pairwise: runPairwise,
@@ -252,8 +423,14 @@ async function runTournament(): Promise<void> {
     }
 
     // Run pairwise comparisons to update scores
+    let roundJudgments: PairwiseJudgment[] = [];
     if (!isDryRun) {
-      await runPairwiseComparisons(photos, config.model);
+      roundJudgments = await runPairwiseComparisons(
+        photos,
+        config.model,
+        round
+      );
+      allJudgments.push(...roundJudgments);
     }
 
     // Apply elimination algorithm
@@ -266,7 +443,7 @@ async function runTournament(): Promise<void> {
 
     // Save results
     if (!isDryRun) {
-      saveResults(photos, config, round);
+      saveResults(photos, config, round, allJudgments);
     }
   }
 

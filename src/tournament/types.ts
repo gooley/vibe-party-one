@@ -10,11 +10,13 @@ export interface ScoredPhoto {
 }
 
 export interface TournamentConfig {
-  algorithm: 'pairwise' | 'nwise' | 'elo';
+  algorithm: "pairwise" | "nwise" | "elo";
   rounds: number;
   model: string;
   batchSize?: number;
   eliminationRate?: number;
+  tournamentId?: string;
+  group?: string;
 }
 
 export interface TournamentResult {
@@ -22,9 +24,24 @@ export interface TournamentResult {
   config: TournamentConfig;
   round: number;
   timestamp: Date;
+  judgments: PairwiseJudgment[];
+  tournamentId: string;
 }
 
 export interface JudgmentResult {
-  winner: 'a' | 'b';
+  winner: "a" | "b";
   explanation: string;
+}
+
+export interface PairwiseJudgment {
+  id: string;
+  photoA: PhotoID;
+  photoB: PhotoID;
+  photoAPath: string;
+  photoBPath: string;
+  winner: "a" | "b";
+  explanation: string;
+  timestamp: Date;
+  round: number;
+  model: string;
 }
