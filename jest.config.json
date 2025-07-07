@@ -1,0 +1,16 @@
+{
+  "preset": "ts-jest/presets/default-esm",
+  "testEnvironment": "node",
+  "roots": ["<rootDir>/src"],
+  "testMatch": [
+    "**/__tests__/**/*.+(ts|tsx|js)",
+    "**/*.(test|spec).+(ts|tsx|js)"
+  ],
+  "transform": {
+    "^.+\\.(ts|tsx)$": ["ts-jest", { "useESM": true }]
+  },
+  "moduleNameMapping": {
+    "^(\\.{1,2}/.*)\\.js$": "$1"
+  },
+  "extensionsToTreatAsEsm": [".ts"]
+}
