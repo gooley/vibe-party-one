@@ -9,6 +9,8 @@
     "dev": "tsc --watch",
     "lint": "eslint src --ext .ts,.tsx",
     "type-check": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
     "clean": "rm -rf dist"
   },
   "devDependencies": {
