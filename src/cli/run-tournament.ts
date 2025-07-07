@@ -13,6 +13,7 @@ import {
   ScoredPhoto,
   TournamentResult,
   PhotoID,
+  PairwiseJudgment,
 } from "../tournament/types.js";
 import { runPairwise, runNwise, runElo } from "../tournament/bracket.js";
 import { judgePair } from "../scoring/openrouter.js";
@@ -31,7 +32,7 @@ function loadConfig(): TournamentConfig {
   if (!configArg) {
     // Default configuration
     return {
-      algorithm: "pairwise",
+      algorithm: "elo",
       rounds: 3,
       model: "google/gemini-2.5-flash-preview-05-20",
       eliminationRate: 0.5,
@@ -39,7 +40,13 @@ function loadConfig(): TournamentConfig {
   }
 
   try {
-    return JSON.parse(configArg) as TournamentConfig;
+    const config = JSON.parse(configArg) as TournamentConfig;
+    // Generate tournament ID if not provided
+    if (!config.tournamentId) {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      config.tournamentId = `tournament-${config.algorithm}-${timestamp}`;
+    }
+    return config;
   } catch (error) {
     console.error("Invalid JSON configuration:", error);
     process.exit(1);
@@ -100,10 +107,12 @@ async function initializePhotos(photoPaths: string[]): Promise<ScoredPhoto[]> {
  */
 async function runPairwiseComparisons(
   photos: ScoredPhoto[],
-  model: string
-): Promise<void> {
+  model: string,
+  round: number
+): Promise<PairwiseJudgment[]> {
   const activePhotos = photos.filter((p) => !p.eliminated);
   const comparisons = Math.min(10, activePhotos.length * 2); // Limit comparisons
+  const judgments: PairwiseJudgment[] = [];
 
   for (let i = 0; i < comparisons; i++) {
     // Pick two random photos
@@ -118,6 +127,21 @@ async function runPairwiseComparisons(
 
     try {
       const judgment = await judgePair(photoA.path, photoB.path, model);
+
+      // Create judgment record
+      const judgmentRecord: PairwiseJudgment = {
+        id: `${photoA.id}-vs-${photoB.id}-${Date.now()}`,
+        photoA: photoA.id,
+        photoB: photoB.id,
+        photoAPath: photoA.path,
+        photoBPath: photoB.path,
+        winner: judgment.winner,
+        explanation: judgment.explanation,
+        timestamp: new Date(),
+        round,
+        model,
+      };
+      judgments.push(judgmentRecord);
 
       // Update scores based on judgment
       const winner = judgment.winner === "a" ? photoA : photoB;
@@ -137,6 +161,8 @@ async function runPairwiseComparisons(
       console.error(`  Error comparing photos: ${error}`);
     }
   }
+
+  return judgments;
 }
 
 /**
@@ -145,20 +171,25 @@ async function runPairwiseComparisons(
 function saveResults(
   photos: ScoredPhoto[],
   config: TournamentConfig,
-  round: number
+  round: number,
+  judgments: PairwiseJudgment[]
 ): void {
   if (!existsSync(RESULTS_DIR)) {
     mkdirSync(RESULTS_DIR, { recursive: true });
   }
+
+  const tournamentId = config.tournamentId || `tournament-${Date.now()}`;
 
   const result: TournamentResult = {
     photos,
     config,
     round,
     timestamp: new Date(),
+    judgments,
+    tournamentId,
   };
 
-  const filename = join(RESULTS_DIR, `round-${round}.json`);
+  const filename = join(RESULTS_DIR, `${tournamentId}-round-${round}.json`);
   writeFileSync(filename, JSON.stringify(result, null, 2));
   console.log(`Results saved to ${filename}`);
 }
@@ -166,16 +197,18 @@ function saveResults(
 /**
  * Load existing results for resume functionality
  */
-function loadExistingResults(): {
+function loadExistingResults(tournamentId?: string): {
   photos: ScoredPhoto[];
   lastRound: number;
+  judgments: PairwiseJudgment[];
 } | null {
   if (!existsSync(RESULTS_DIR)) {
     return null;
   }
 
+  const prefix = tournamentId ? `${tournamentId}-round-` : "round-";
   const resultFiles = readdirSync(RESULTS_DIR)
-    .filter((file) => file.startsWith("round-") && file.endsWith(".json"))
+    .filter((file) => file.startsWith(prefix) && file.endsWith(".json"))
     .sort();
 
   if (resultFiles.length === 0) {
@@ -183,13 +216,29 @@ function loadExistingResults(): {
   }
 
   const lastFile = resultFiles[resultFiles.length - 1];
-  const lastRound = parseInt(lastFile.match(/round-(\d+)\.json$/)?.[1] || "0");
+  const roundPattern = tournamentId
+    ? new RegExp(
+        `${tournamentId.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&"
+        )}-round-(\\d+)\\.json$`
+      )
+    : /round-(\d+)\.json$/;
+  const lastRound = parseInt(lastFile.match(roundPattern)?.[1] || "0");
 
   try {
     const data = JSON.parse(
       readFileSync(join(RESULTS_DIR, lastFile), "utf-8")
     ) as TournamentResult;
-    return { photos: data.photos, lastRound };
+
+    // Handle legacy results without judgments field
+    const judgments = data.judgments || [];
+
+    return {
+      photos: data.photos,
+      lastRound,
+      judgments,
+    };
   } catch (error) {
     console.error("Error loading existing results:", error);
     return null;
@@ -204,19 +253,29 @@ async function runTournament(): Promise<void> {
   const isDryRun = process.argv.includes("--dry-run");
   const shouldResume = process.argv.includes("--resume");
 
+  // Generate tournament ID for new tournaments
+  if (!config.tournamentId) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    config.tournamentId = `tournament-${config.algorithm}-${timestamp}`;
+  }
+
   console.log("Tournament Configuration:", JSON.stringify(config, null, 2));
   console.log("Dry run:", isDryRun);
   console.log("Resume:", shouldResume);
 
   let photos: ScoredPhoto[];
   let startRound = 0;
+  let allJudgments: PairwiseJudgment[] = [];
 
   if (shouldResume) {
-    const existing = loadExistingResults();
+    const existing = loadExistingResults(config.tournamentId);
     if (existing) {
       photos = existing.photos;
       startRound = existing.lastRound;
-      console.log(`Resuming from round ${startRound}`);
+      allJudgments = existing.judgments;
+      console.log(
+        `Resuming tournament ${config.tournamentId} from round ${startRound} with ${allJudgments.length} existing judgments`
+      );
     } else {
       console.log("No existing results found, starting fresh");
       photos = await initializePhotos(getPhotoFiles());
@@ -252,8 +311,14 @@ async function runTournament(): Promise<void> {
     }
 
     // Run pairwise comparisons to update scores
+    let roundJudgments: PairwiseJudgment[] = [];
     if (!isDryRun) {
-      await runPairwiseComparisons(photos, config.model);
+      roundJudgments = await runPairwiseComparisons(
+        photos,
+        config.model,
+        round
+      );
+      allJudgments.push(...roundJudgments);
     }
 
     // Apply elimination algorithm
@@ -266,7 +331,7 @@ async function runTournament(): Promise<void> {
 
     // Save results
     if (!isDryRun) {
-      saveResults(photos, config, round);
+      saveResults(photos, config, round, allJudgments);
     }
   }
 

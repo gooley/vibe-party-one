@@ -54,11 +54,12 @@ export async function judgePair(
               {
                 type: "text",
                 text: `You will be shown two JPEG photos, encoded as base64 data URLs A and B.
-Pick the better photograph purely on overall visual appeal.
+Pick the better photograph purely on overall visual appeal, storytelling, and emotional impact.
+Point out the positives and negatives per photo, in addition to the overall comparison.
 Reply ONLY with:
 {
   "winner": "<a|b>",
-  "explanation": "<≤40 words>"
+  "explanation": "<≤40 words for comparison, and 20 words per photo>"
 }`,
               },
               {
@@ -120,7 +121,7 @@ Reply ONLY with:
       throw new Error("Invalid winner in judgment response");
     }
 
-    if (!judgment.explanation || judgment.explanation.length > 200) {
+    if (!judgment.explanation) {
       throw new Error("Invalid explanation in judgment response");
     }
 
