@@ -26,25 +26,55 @@ const RESULTS_DIR = "./results";
  */
 function loadConfig(): TournamentConfig {
   const args = process.argv.slice(2);
-  const nonFlagArgs = args.filter((arg) => !arg.startsWith("--"));
-  const configArg = nonFlagArgs[0];
+
+  // Parse --group flag
+  const groupArgIndex = args.findIndex((arg) => arg === "--group");
+  const groupFromFlag =
+    groupArgIndex !== -1 && args[groupArgIndex + 1]
+      ? args[groupArgIndex + 1]
+      : undefined;
+
+  // Filter out flag arguments and their values to find config JSON
+  const filteredArgs = args.filter((arg, index) => {
+    // Skip flags that start with --
+    if (arg.startsWith("--")) return false;
+    // Skip values after --group flag
+    if (index > 0 && args[index - 1] === "--group") return false;
+    return true;
+  });
+
+  const configArg = filteredArgs[0];
 
   if (!configArg) {
     // Default configuration
-    return {
-      algorithm: "elo",
+    const config: TournamentConfig = {
+      algorithm: "pairwise",
       rounds: 3,
-      model: "google/gemini-2.5-flash-preview-05-20",
+      // model: "google/gemini-2.5-flash-preview-05-20",
+      model: "anthropic/claude-sonnet-4",
       eliminationRate: 0.5,
     };
+
+    if (groupFromFlag) {
+      config.group = groupFromFlag;
+    }
+
+    return config;
   }
 
   try {
     const config = JSON.parse(configArg) as TournamentConfig;
+
+    // Command line --group flag overrides config file group
+    if (groupFromFlag) {
+      config.group = groupFromFlag;
+    }
+
     // Generate tournament ID if not provided
     if (!config.tournamentId) {
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      config.tournamentId = `tournament-${config.algorithm}-${timestamp}`;
+      const groupSuffix = config.group ? `-${config.group}` : "";
+      config.tournamentId = `tournament-${config.algorithm}${groupSuffix}-${timestamp}`;
     }
     return config;
   } catch (error) {
@@ -54,25 +84,84 @@ function loadConfig(): TournamentConfig {
 }
 
 /**
- * Get all photo files from the photos directory
+ * Get available photo groups (subdirectories) in the photos folder
  */
-function getPhotoFiles(): string[] {
+function getAvailableGroups(): string[] {
+  if (!existsSync(PHOTOS_DIR)) {
+    return [];
+  }
+
+  const items = readdirSync(PHOTOS_DIR);
+  const groups = items.filter((item) => {
+    const itemPath = join(PHOTOS_DIR, item);
+    return statSync(itemPath).isDirectory();
+  });
+
+  return groups.sort();
+}
+
+/**
+ * Get all photo files from the photos directory or a specific group
+ */
+function getPhotoFiles(group?: string): string[] {
   if (!existsSync(PHOTOS_DIR)) {
     console.error(`Photos directory not found: ${PHOTOS_DIR}`);
     process.exit(1);
   }
 
-  const files = readdirSync(PHOTOS_DIR)
-    .filter((file) => {
-      const ext = extname(file).toLowerCase();
-      return [".jpg", ".jpeg", ".png"].includes(ext);
-    })
-    .map((file) => join(PHOTOS_DIR, file))
-    .filter((filePath) => statSync(filePath).isFile())
-    .sort((a, b) => statSync(a).mtime.getTime() - statSync(b).mtime.getTime());
+  let searchDir = PHOTOS_DIR;
+  let files: string[] = [];
+
+  if (group) {
+    // Search in specific group subdirectory
+    searchDir = join(PHOTOS_DIR, group);
+    if (!existsSync(searchDir)) {
+      console.error(`Group directory not found: ${searchDir}`);
+      console.log(`Available groups: ${getAvailableGroups().join(", ")}`);
+      process.exit(1);
+    }
+
+    files = readdirSync(searchDir)
+      .filter((file) => {
+        const ext = extname(file).toLowerCase();
+        return [".jpg", ".jpeg", ".png"].includes(ext);
+      })
+      .map((file) => join(searchDir, file))
+      .filter((filePath) => statSync(filePath).isFile())
+      .sort(
+        (a, b) => statSync(a).mtime.getTime() - statSync(b).mtime.getTime()
+      );
+  } else {
+    // Search in all groups or root photos directory
+    const availableGroups = getAvailableGroups();
+
+    if (availableGroups.length > 0) {
+      console.log(`Available groups: ${availableGroups.join(", ")}`);
+      console.error(
+        "Multiple groups found. Please specify a group using the --group flag or include group in config JSON."
+      );
+      console.error(
+        `Example: npm run tournament:demo '{"group": "${availableGroups[0]}", "algorithm": "elo"}'`
+      );
+      process.exit(1);
+    } else {
+      // No subdirectories, search in root photos directory
+      files = readdirSync(PHOTOS_DIR)
+        .filter((file) => {
+          const ext = extname(file).toLowerCase();
+          return [".jpg", ".jpeg", ".png"].includes(ext);
+        })
+        .map((file) => join(PHOTOS_DIR, file))
+        .filter((filePath) => statSync(filePath).isFile())
+        .sort(
+          (a, b) => statSync(a).mtime.getTime() - statSync(b).mtime.getTime()
+        );
+    }
+  }
 
   if (files.length === 0) {
-    console.error("No photo files found in photos directory");
+    const groupMsg = group ? ` in group "${group}"` : "";
+    console.error(`No photo files found${groupMsg}`);
     process.exit(1);
   }
 
@@ -249,6 +338,27 @@ function loadExistingResults(tournamentId?: string): {
  * Main tournament runner
  */
 async function runTournament(): Promise<void> {
+  // Check for --list-groups flag
+  if (process.argv.includes("--list-groups")) {
+    const groups = getAvailableGroups();
+    if (groups.length === 0) {
+      console.log(
+        "No groups found. Photos should be placed directly in the photos/ directory."
+      );
+    } else {
+      console.log("Available photo groups:");
+      groups.forEach((group) => {
+        const groupPath = join(PHOTOS_DIR, group);
+        const photoCount = readdirSync(groupPath).filter((file) => {
+          const ext = extname(file).toLowerCase();
+          return [".jpg", ".jpeg", ".png"].includes(ext);
+        }).length;
+        console.log(`  ${group} (${photoCount} photos)`);
+      });
+    }
+    return;
+  }
+
   const config = loadConfig();
   const isDryRun = process.argv.includes("--dry-run");
   const shouldResume = process.argv.includes("--resume");
@@ -256,7 +366,8 @@ async function runTournament(): Promise<void> {
   // Generate tournament ID for new tournaments
   if (!config.tournamentId) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    config.tournamentId = `tournament-${config.algorithm}-${timestamp}`;
+    const groupSuffix = config.group ? `-${config.group}` : "";
+    config.tournamentId = `tournament-${config.algorithm}${groupSuffix}-${timestamp}`;
   }
 
   console.log("Tournament Configuration:", JSON.stringify(config, null, 2));
@@ -278,13 +389,14 @@ async function runTournament(): Promise<void> {
       );
     } else {
       console.log("No existing results found, starting fresh");
-      photos = await initializePhotos(getPhotoFiles());
+      photos = await initializePhotos(getPhotoFiles(config.group));
     }
   } else {
-    photos = await initializePhotos(getPhotoFiles());
+    photos = await initializePhotos(getPhotoFiles(config.group));
   }
 
-  console.log(`Starting tournament with ${photos.length} photos`);
+  const groupMsg = config.group ? ` from group "${config.group}"` : "";
+  console.log(`Starting tournament with ${photos.length} photos${groupMsg}`);
 
   const algorithmMap = {
     pairwise: runPairwise,

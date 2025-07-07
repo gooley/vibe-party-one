@@ -26,6 +26,9 @@ interface Tournament {
   results: TournamentResult[];
   maxRound: number;
   judgments: any[];
+  group?: string;
+  algorithm?: string;
+  displayName?: string;
 }
 
 interface ApiResponse {
@@ -34,18 +37,76 @@ interface ApiResponse {
 }
 
 export default function Home() {
-  const [cutoff, setCutoff] = useState(0);
+  const [cutoff, setCutoff] = useState(1);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [visiblePhotos, setVisiblePhotos] = useState<Photo[]>([]);
   const [selectedTournament, setSelectedTournament] = useState<string>("");
+  const [selectedGroup, setSelectedGroup] = useState<string>("all");
   const [stats, setStats] = useState({
     total: 0,
     visible: 0,
     eliminated: 0,
     currentRound: 0,
   });
+
+  // Parse tournament info from ID
+  const parseTournamentInfo = (tournament: Tournament) => {
+    const id = tournament.id;
+    const config = tournament.config || {};
+
+    // Try to parse new format: tournament-{algorithm}-{group}-{timestamp}
+    const match = id.match(/^tournament-([^-]+)-([^-]+)-(.+)$/);
+    if (match) {
+      const [, algorithm, group, timestamp] = match;
+      return {
+        algorithm: algorithm || config.algorithm || "unknown",
+        group: group || config.group || "default",
+        timestamp,
+        displayName: `${group} (${algorithm})`,
+      };
+    }
+
+    // Try legacy format: tournament-{algorithm}-{timestamp}
+    const legacyMatch = id.match(/^tournament-([^-]+)-(.+)$/);
+    if (legacyMatch) {
+      const [, algorithm, timestamp] = legacyMatch;
+      return {
+        algorithm: algorithm || config.algorithm || "unknown",
+        group: config.group || "default",
+        timestamp,
+        displayName: `default (${algorithm})`,
+      };
+    }
+
+    // Fallback
+    return {
+      algorithm: config.algorithm || "unknown",
+      group: config.group || "default",
+      timestamp: "unknown",
+      displayName: id.replace(/^tournament-/, "").replace(/-/g, " "),
+    };
+  };
+
+  // Get available groups from tournaments
+  const getAvailableGroups = (tournaments: Tournament[]) => {
+    const groups = new Set<string>();
+    tournaments.forEach((tournament) => {
+      const info = parseTournamentInfo(tournament);
+      groups.add(info.group);
+    });
+    return Array.from(groups).sort();
+  };
+
+  // Filter tournaments by selected group
+  const getFilteredTournaments = (tournaments: Tournament[]) => {
+    if (selectedGroup === "all") return tournaments;
+    return tournaments.filter((tournament) => {
+      const info = parseTournamentInfo(tournament);
+      return info.group === selectedGroup;
+    });
+  };
 
   // Fetch data function
   const fetchData = async () => {
@@ -78,14 +139,21 @@ export default function Home() {
       return;
     }
 
-    // Auto-select first tournament if none selected
-    if (!selectedTournament && data.tournaments.length > 0) {
-      setSelectedTournament(data.tournaments[0].id);
+    const filteredTournaments = getFilteredTournaments(data.tournaments);
+
+    // Auto-select first tournament if none selected or if current selection is not in filtered list
+    if (
+      !selectedTournament ||
+      !filteredTournaments.find((t) => t.id === selectedTournament)
+    ) {
+      if (filteredTournaments.length > 0) {
+        setSelectedTournament(filteredTournaments[0].id);
+      }
       return;
     }
 
     // Find the selected tournament
-    const tournament = data.tournaments.find(
+    const tournament = filteredTournaments.find(
       (t) => t.id === selectedTournament
     );
     if (!tournament || !tournament.results.length) {
@@ -98,7 +166,8 @@ export default function Home() {
     const latestResult = tournament.results[tournament.results.length - 1];
     const photos = latestResult.photos || [];
     const maxRound = tournament.maxRound;
-    const targetRound = Math.floor(cutoff * maxRound);
+    // Map cutoff to rounds: 1 = final round, 0 = round 0
+    const targetRound = Math.round(cutoff * maxRound);
 
     // Filter photos that survived to the target round
     const filtered = photos.filter((photo) => {
@@ -113,9 +182,9 @@ export default function Home() {
       total: photos.length,
       visible: filtered.length,
       eliminated: photos.filter((p) => p.eliminated).length,
-      currentRound: targetRound,
+      currentRound: Math.round(cutoff * maxRound),
     });
-  }, [data, cutoff, selectedTournament]);
+  }, [data, cutoff, selectedTournament, selectedGroup]);
 
   if (error) {
     return (
@@ -232,38 +301,81 @@ export default function Home() {
           </a>
         </div>
 
-        {/* Tournament Selector */}
-        {data?.tournaments && data.tournaments.length > 1 && (
+        {/* Group and Tournament Selectors */}
+        {data?.tournaments && data.tournaments.length > 0 && (
           <div style={{ marginBottom: "1rem" }}>
-            <label
-              htmlFor="tournament-select"
-              style={{
-                fontSize: "0.875rem",
-                fontWeight: 500,
-                marginRight: "0.5rem",
-              }}
-            >
-              Tournament:
-            </label>
-            <select
-              id="tournament-select"
-              value={selectedTournament}
-              onChange={(e) => setSelectedTournament(e.target.value)}
-              style={{
-                padding: "0.5rem",
-                borderRadius: "4px",
-                border: "1px solid #ddd",
-                fontSize: "0.875rem",
-              }}
-            >
-              {data.tournaments.map((tournament) => (
-                <option key={tournament.id} value={tournament.id}>
-                  {tournament.id.replace(/^tournament-/, "").replace(/-/g, " ")}
-                  ({tournament.config.algorithm || "unknown"} -{" "}
-                  {tournament.maxRound} rounds)
-                </option>
-              ))}
-            </select>
+            {/* Group Selector */}
+            {getAvailableGroups(data.tournaments).length > 1 && (
+              <div style={{ marginBottom: "0.5rem" }}>
+                <label
+                  htmlFor="group-select"
+                  style={{
+                    fontSize: "0.875rem",
+                    fontWeight: 500,
+                    marginRight: "0.5rem",
+                  }}
+                >
+                  Photo Group:
+                </label>
+                <select
+                  id="group-select"
+                  value={selectedGroup}
+                  onChange={(e) => setSelectedGroup(e.target.value)}
+                  style={{
+                    padding: "0.5rem",
+                    borderRadius: "4px",
+                    border: "1px solid #ddd",
+                    fontSize: "0.875rem",
+                    marginRight: "1rem",
+                  }}
+                >
+                  <option value="all">All Groups</option>
+                  {getAvailableGroups(data.tournaments).map((group) => (
+                    <option key={group} value={group}>
+                      {group}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Tournament Selector */}
+            {getFilteredTournaments(data.tournaments).length > 1 && (
+              <div>
+                <label
+                  htmlFor="tournament-select"
+                  style={{
+                    fontSize: "0.875rem",
+                    fontWeight: 500,
+                    marginRight: "0.5rem",
+                  }}
+                >
+                  Tournament:
+                </label>
+                <select
+                  id="tournament-select"
+                  value={selectedTournament}
+                  onChange={(e) => setSelectedTournament(e.target.value)}
+                  style={{
+                    padding: "0.5rem",
+                    borderRadius: "4px",
+                    border: "1px solid #ddd",
+                    fontSize: "0.875rem",
+                  }}
+                >
+                  {getFilteredTournaments(data.tournaments).map(
+                    (tournament) => {
+                      const info = parseTournamentInfo(tournament);
+                      return (
+                        <option key={tournament.id} value={tournament.id}>
+                          {info.displayName} - {tournament.maxRound} rounds
+                        </option>
+                      );
+                    }
+                  )}
+                </select>
+              </div>
+            )}
           </div>
         )}
 
@@ -283,7 +395,16 @@ export default function Home() {
             type="range"
             min="0"
             max="1"
-            step="0.01"
+            step={
+              getFilteredTournaments(data?.tournaments || []).find(
+                (t) => t.id === selectedTournament
+              )?.maxRound
+                ? 1 /
+                  getFilteredTournaments(data?.tournaments || []).find(
+                    (t) => t.id === selectedTournament
+                  )!.maxRound
+                : 0.01
+            }
             value={cutoff}
             onChange={(e) => setCutoff(parseFloat(e.target.value))}
             style={{
@@ -295,9 +416,17 @@ export default function Home() {
             }}
           />
           <span style={{ fontSize: "0.875rem", whiteSpace: "nowrap" }}>
-            Round {stats.currentRound} of{" "}
-            {data?.tournaments?.find((t) => t.id === selectedTournament)
-              ?.maxRound || 0}
+            Round{" "}
+            {Math.round(
+              cutoff *
+                (getFilteredTournaments(data?.tournaments || []).find(
+                  (t) => t.id === selectedTournament
+                )?.maxRound || 0)
+            )}{" "}
+            of{" "}
+            {getFilteredTournaments(data?.tournaments || []).find(
+              (t) => t.id === selectedTournament
+            )?.maxRound || 0}
           </span>
         </div>
 
@@ -313,10 +442,12 @@ export default function Home() {
           <div>Total Photos: {stats.total}</div>
           <div>Visible: {stats.visible}</div>
           <div>Eliminated: {stats.eliminated}</div>
+          {selectedGroup !== "all" && <div>Group: {selectedGroup}</div>}
           <div>
             Max Round:{" "}
-            {data?.tournaments?.find((t) => t.id === selectedTournament)
-              ?.maxRound || 0}
+            {getFilteredTournaments(data?.tournaments || []).find(
+              (t) => t.id === selectedTournament
+            )?.maxRound || 0}
           </div>
         </div>
       </div>

@@ -16,6 +16,7 @@ export interface TournamentConfig {
   batchSize?: number;
   eliminationRate?: number;
   tournamentId?: string;
+  group?: string;
 }
 
 export interface TournamentResult {
