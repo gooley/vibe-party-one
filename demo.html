@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photo Tournament Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        .header {
+            background: white;
+            padding: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            color: #2c3e50;
+        }
+        
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .controls label {
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .slider {
+            flex: 1;
+            height: 8px;
+            background: #ddd;
+            border-radius: 4px;
+            outline: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+        }
+        
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3498db;
+            cursor: pointer;
+        }
+        
+        .slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3498db;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .stats {
+            display: flex;
+            gap: 2rem;
+            font-size: 0.9rem;
+            color: #666;
+        }
+        
+        .main-content {
+            padding: 2rem 0;
+        }
+        
+        .photo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        
+        .photo-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .photo-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        .photo-placeholder {
+            width: 100%;
+            height: 200px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1.2rem;
+            font-weight: 500;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+        
+        .photo-info {
+            font-size: 0.9rem;
+            color: #666;
+        }
+        
+        .photo-info .photo-id {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+        }
+        
+        .photo-info div {
+            margin-bottom: 0.3rem;
+        }
+        
+        .status-active {
+            color: #27ae60;
+            font-weight: 500;
+        }
+        
+        .status-eliminated {
+            color: #e74c3c;
+            font-weight: 500;
+        }
+        
+        .demo-info {
+            background: #e8f4f8;
+            border: 1px solid #bee5eb;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .demo-info h3 {
+            color: #0c5460;
+            margin-bottom: 0.5rem;
+        }
+        
+        .demo-info p {
+            color: #0c5460;
+            font-size: 0.9rem;
+        }
+        
+        .no-photos {
+            text-align: center;
+            color: #666;
+            font-size: 1.1rem;
+            margin-top: 3rem;
+        }
+        
+        .code {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 0.3rem 0.6rem;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.85rem;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h1>Photo Tournament Demo</h1>
+            <div class="controls">
+                <label for="tournament-slider">Tournament Progress:</label>
+                <input type="range" id="tournament-slider" class="slider" min="0" max="1" step="0.01" value="0">
+                <span id="round-display">Round 0 of 2</span>
+            </div>
+            <div class="stats">
+                <div>Total Photos: <span id="total-photos">3</span></div>
+                <div>Visible: <span id="visible-photos">3</span></div>
+                <div>Eliminated: <span id="eliminated-photos">0</span></div>
+                <div>Max Round: <span id="max-rounds">2</span></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="container">
+            <div class="demo-info">
+                <h3>Demo Tournament Results</h3>
+                <p>This demonstrates the photo tournament web viewer functionality. In a real setup, this would load data from the tournament results API. Use the slider above to simulate viewing photos from different tournament rounds.</p>
+            </div>
+            
+            <div class="photo-grid" id="photo-grid">
+                <!-- Photos will be populated by JavaScript -->
+            </div>
+            
+            <div class="no-photos" id="no-photos" style="display: none;">
+                <p>No photos to display at this tournament level</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Sample tournament data (simulates API response)
+        const tournamentData = {
+            photos: [
+                {
+                    id: 'photo-0',
+                    path: 'photos/sample1.jpg',
+                    score: 1032.5,
+                    round: 2,
+                    eliminated: false,
+                    name: 'Sunset Landscape'
+                },
+                {
+                    id: 'photo-1',
+                    path: 'photos/sample2.jpg',
+                    score: 998.2,
+                    round: 1,
+                    eliminated: true,
+                    name: 'City Skyline'
+                },
+                {
+                    id: 'photo-2',
+                    path: 'photos/sample3.jpg',
+                    score: 1015.8,
+                    round: 2,
+                    eliminated: false,
+                    name: 'Mountain Vista'
+                }
+            ],
+            maxRound: 2
+        };
+
+        const slider = document.getElementById('tournament-slider');
+        const roundDisplay = document.getElementById('round-display');
+        const photoGrid = document.getElementById('photo-grid');
+        const noPhotos = document.getElementById('no-photos');
+        const totalPhotosSpan = document.getElementById('total-photos');
+        const visiblePhotosSpan = document.getElementById('visible-photos');
+        const eliminatedPhotosSpan = document.getElementById('eliminated-photos');
+        const maxRoundsSpan = document.getElementById('max-rounds');
+
+        function updateDisplay() {
+            const cutoff = parseFloat(slider.value);
+            const targetRound = Math.floor(cutoff * tournamentData.maxRound);
+            
+            // Filter photos based on tournament progress
+            const visiblePhotos = tournamentData.photos.filter(photo => {
+                if (photo.eliminated) {
+                    return photo.round > targetRound;
+                }
+                return true;
+            });
+            
+            // Update stats
+            roundDisplay.textContent = `Round ${targetRound} of ${tournamentData.maxRound}`;
+            totalPhotosSpan.textContent = tournamentData.photos.length;
+            visiblePhotosSpan.textContent = visiblePhotos.length;
+            eliminatedPhotosSpan.textContent = tournamentData.photos.filter(p => p.eliminated).length;
+            maxRoundsSpan.textContent = tournamentData.maxRound;
+            
+            // Update photo grid
+            if (visiblePhotos.length === 0) {
+                photoGrid.style.display = 'none';
+                noPhotos.style.display = 'block';
+            } else {
+                photoGrid.style.display = 'grid';
+                noPhotos.style.display = 'none';
+                
+                photoGrid.innerHTML = visiblePhotos.map(photo => `
+                    <div class="photo-card">
+                        <div class="photo-placeholder">
+                            📸 ${photo.name}
+                        </div>
+                        <div class="photo-info">
+                            <div class="photo-id">${photo.id}</div>
+                            <div>Score: ${photo.score.toFixed(1)}</div>
+                            <div>Round: ${photo.round}</div>
+                            <div>Status: <span class="${photo.eliminated ? 'status-eliminated' : 'status-active'}">
+                                ${photo.eliminated ? 'Eliminated' : 'Active'}
+                            </span></div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // Initialize display
+        updateDisplay();
+        
+        // Handle slider changes
+        slider.addEventListener('input', updateDisplay);
+        
+        // Add some interactive feedback
+        document.querySelectorAll('.photo-card').forEach(card => {
+            card.addEventListener('mouseenter', () => {
+                card.style.transform = 'translateY(-4px) scale(1.02)';
+            });
+            
+            card.addEventListener('mouseleave', () => {
+                card.style.transform = 'translateY(-4px) scale(1)';
+            });
+        });
+    </script>
+</body>
+</html>
